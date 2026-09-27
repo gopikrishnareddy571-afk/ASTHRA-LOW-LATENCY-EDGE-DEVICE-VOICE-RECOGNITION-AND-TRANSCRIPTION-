@@ -1,0 +1,71 @@
+import asyncio
+import json
+import websockets
+from vosk import Model, KaldiRecognizer
+
+print("Loading Vosk AI model into memory...")
+model = Model("model")
+print("AI Model Ready!")
+
+async def handle_audio(websocket):
+    print(f"\n[+] ASTHRA Detected! ESP32 Connected from: {websocket.remote_address}")
+    recognizer = KaldiRecognizer(model, 16000)
+    recognizer.SetWords(False)
+
+    print("[+] Live streaming command from ESP32...")
+    bytes_received = 0
+
+    try:
+        # Keep receiving chunks until the ESP32 closes the connection
+        while True:
+            # 1.5s timeout: if ESP32 stops sending, we know the command is over
+            chunk = await asyncio.wait_for(websocket.recv(), timeout=1.5)
+            
+            if isinstance(chunk, bytes):
+                bytes_received += len(chunk)
+                # Feed audio to Vosk LIVE as it arrives
+                recognizer.AcceptWaveform(chunk)
+
+    except websockets.exceptions.ConnectionClosed:
+        print(f"[-] Stream finished cleanly by ESP32. Received {bytes_received} bytes.")
+    except asyncio.TimeoutError:
+        print(f"[-] Stream finished (Timeout). Received {bytes_received} bytes.")
+    except Exception as e:
+        print(f"[!] Server stream error: {e}")
+
+    # Now that the 4-second stream is over, extract the text!
+    print("[+] Transcribing...")
+    final_res = json.loads(recognizer.FinalResult())
+    text = final_res.get("text", "").strip()
+
+    if text:
+        print(f"\n==========================================")
+        print(f">>> RECOGNIZED COMMAND: {text.upper()} <<<")
+        print(f"==========================================\n")
+        try:
+            await websocket.send("Text received")
+        except:
+            pass # Socket might already be closed, that's fine
+    else:
+        print("\n[!] Audio processed, but no words were clear. (Silence or background noise)\n")
+        try:
+            await websocket.send("Silence")
+        except:
+            pass
+
+    print("[-] Session completed. Waiting for next ASTHRA trigger...\n")
+
+
+async def main():
+    print("WebSocket Server active on ws://0.0.0.0:5001")
+    async with websockets.serve(
+        handle_audio, 
+        "0.0.0.0", 
+        5001, 
+        ping_interval=None, 
+        ping_timeout=None
+    ):
+        await asyncio.Future()
+
+if __name__ == "__main__":
+    asyncio.run(main())
