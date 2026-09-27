@@ -1,0 +1,21 @@
+# Software Architecture
+
+```text
+ESP32 Firmware
+      │
+      ├── I2S Audio Capture
+      │
+      ├── Audio Buffer
+      │
+      ├── MFCC Processing
+      │
+      ├── TensorFlow Lite Micro
+      │
+      ├── Wake-Word Detection
+      │
+      ├── OLED Interface
+      │
+      └── Wi-Fi / WebSocket
+                  │
+                  ↓
+              ASR Server
