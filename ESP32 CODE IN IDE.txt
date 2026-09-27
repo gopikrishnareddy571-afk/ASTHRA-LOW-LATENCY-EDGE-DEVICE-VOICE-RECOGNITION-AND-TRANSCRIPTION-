@@ -1,0 +1,537 @@
+/*
+   ============================================================
+   ASTHRA - SAFE MEMORY BUILD (NO COMPILER ERRORS)
+   ============================================================
+*/
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "driver/i2s.h"
+
+#include <MicroTFLite.h>
+#include "asthra_model_int8.h"
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const char* ssid = "VINCE 9877";
+const char* password = "79A)26a0";
+const char* server_host = "192.168.137.1";
+const uint16_t server_port = 5001;
+
+#define ASTHRA_THRESHOLD 0.35f
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_SDA 21
+#define OLED_SCL 22
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+WebSocketsClient webSocket;
+
+// ============================================================
+// SAFE MEMORY AUDIO PARAMETERS
+// ============================================================
+
+#define I2S_PORT I2S_NUM_0
+#define I2S_SCK 26
+#define I2S_WS  25
+#define I2S_SD  33
+
+#define SAMPLE_RATE 16000
+// Safely back to 24,000 samples (1.5 seconds) to prevent compiler crash
+#define AUDIO_SAMPLES 24000 
+
+#define FFT_SIZE 512
+#define HOP_LENGTH 160
+#define MFCC_COUNT 13
+#define MFCC_FRAMES 151
+#define MEL_FILTERS 128
+
+#define TENSOR_ARENA_SIZE (80 * 1024)
+
+uint8_t* tensor_arena = nullptr;
+int16_t* audio_ring = nullptr;
+volatile int audio_write_position = 0;
+TaskHandle_t audioTaskHandle = nullptr;
+
+float* mfcc_buffer = nullptr;
+float* realPart = nullptr;
+float* imagPart = nullptr;
+
+struct MelPoint {
+  uint16_t start;
+  uint16_t center;
+  uint16_t end;
+};
+
+MelPoint* mel_points = nullptr;
+
+const tflite::Model* model = nullptr;
+tflite::MicroInterpreter* interpreter = nullptr;
+TfLiteTensor* input = nullptr;
+TfLiteTensor* output = nullptr;
+tflite::MicroMutableOpResolver<12> resolver;
+
+bool modelReady = false;
+volatile bool wsConnected = false;
+volatile bool responseReceived = false;
+
+// ============================================================
+// OLED DISPLAY HELPERS
+// ============================================================
+
+void oledClear() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+}
+
+void showListening() {
+  oledClear();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.println("ASTHRA");
+  
+  display.setTextSize(1);
+  display.setCursor(0, 30);
+  display.println("Listening...");
+  
+  // LIVE RAM READOUT ON OLED
+  display.setCursor(0, 52);
+  display.printf("RAM Free: %d KB", ESP.getFreeHeap() / 1024);
+  
+  display.display();
+}
+
+void showDetected(float confidence) {
+  oledClear();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.println("ASTHRA");
+  display.setCursor(0, 24);
+  display.println("DETECTED!");
+  display.setTextSize(1);
+  display.setCursor(0, 50);
+  display.printf("Conf: %.1f%%", confidence * 100.0f);
+  display.display();
+}
+
+void showSpeakNow() {
+  oledClear();
+  display.setTextSize(2);
+  display.setCursor(0, 4);
+  display.println("SPEAK NOW!");
+  display.setTextSize(1);
+  display.setCursor(0, 32);
+  display.println("Recording command...");
+  display.display();
+}
+
+void showProcessing() {
+  oledClear();
+  display.setTextSize(2);
+  display.setCursor(0, 15);
+  display.println("PROCESSING");
+  display.setTextSize(1);
+  display.setCursor(0, 40);
+  display.println("Transcribing audio...");
+  display.display();
+}
+
+// ============================================================
+// WEBSOCKET CALLBACK
+// ============================================================
+
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      wsConnected = false;
+      break;
+    case WStype_CONNECTED:
+      wsConnected = true;
+      break;
+    case WStype_TEXT:
+      Serial.printf("[Vosk Result]: %s\n", payload);
+      responseReceived = true;
+      break;
+    default:
+      break;
+  }
+}
+
+// ============================================================
+// I2S HARDWARE DRIVER & AUDIO TASK
+// ============================================================
+
+bool setupI2S() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate = SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+    .communication_format = I2S_COMM_FORMAT_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 6,
+    .dma_buf_len = 256,
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
+  };
+
+  i2s_pin_config_t pin_config = {
+    .bck_io_num = I2S_SCK,
+    .ws_io_num = I2S_WS,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num = I2S_SD
+  };
+
+  if (i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL) != ESP_OK) return false;
+  if (i2s_set_pin(I2S_PORT, &pin_config) != ESP_OK) return false;
+  i2s_zero_dma_buffer(I2S_PORT);
+  return true;
+}
+
+void audioTask(void* parameter) {
+  int32_t raw_samples[256];
+  size_t bytes_read;
+
+  while (true) {
+    if (i2s_read(I2S_PORT, raw_samples, sizeof(raw_samples), &bytes_read, portMAX_DELAY) == ESP_OK) {
+      int samples_read = bytes_read / sizeof(int32_t);
+      for (int i = 0; i < samples_read; i++) {
+        int32_t sample = raw_samples[i] >> 12;
+        if (sample > 32767) sample = 32767;
+        if (sample < -32768) sample = -32768;
+
+        audio_ring[audio_write_position] = (int16_t)sample;
+        audio_write_position++;
+        if (audio_write_position >= AUDIO_SAMPLES) {
+          audio_write_position = 0;
+        }
+      }
+    }
+  }
+}
+
+inline int16_t getAudioSample(int endPosition, int index) {
+  int position = endPosition + index;
+  while (position >= AUDIO_SAMPLES) position -= AUDIO_SAMPLES;
+  while (position < 0) position += AUDIO_SAMPLES;
+  return audio_ring[position];
+}
+
+// ============================================================
+// DSP / MFCC ENGINE
+// ============================================================
+
+void calculateFFT() {
+  int j = 0;
+  for (int i = 1; i < FFT_SIZE; i++) {
+    int bit = FFT_SIZE >> 1;
+    while (j & bit) { j ^= bit; bit >>= 1; }
+    j ^= bit;
+    if (i < j) {
+      float tempR = realPart[i]; realPart[i] = realPart[j]; realPart[j] = tempR;
+      float tempI = imagPart[i]; imagPart[i] = imagPart[j]; imagPart[j] = tempI;
+    }
+  }
+
+  for (int len = 2; len <= FFT_SIZE; len <<= 1) {
+    float angle = -2.0f * PI / len;
+    float wReal = cosf(angle); float wImag = sinf(angle);
+    for (int i = 0; i < FFT_SIZE; i += len) {
+      float curReal = 1.0f; float curImag = 0.0f;
+      for (int k = 0; k < len / 2; k++) {
+        int even = i + k; int odd = i + k + len / 2;
+        float oR = realPart[odd] * curReal - imagPart[odd] * curImag;
+        float oI = realPart[odd] * curImag + imagPart[odd] * curReal;
+        float eR = realPart[even]; float eI = imagPart[even];
+        realPart[even] = eR + oR; imagPart[even] = eI + oI;
+        realPart[odd] = eR - oR; imagPart[odd] = eI - oI;
+        float nR = curReal * wReal - curImag * wImag;
+        float nI = curReal * wImag + curImag * wReal;
+        curReal = nR; curImag = nI;
+      }
+    }
+  }
+}
+
+float hzToMel(float hz) { return 2595.0f * log10f(1.0f + hz / 700.0f); }
+float melToHz(float mel) { return 700.0f * (powf(10.0f, mel / 2595.0f) - 1.0f); }
+
+void setupMelFilters() {
+  float minMel = hzToMel(0.0f); float maxMel = hzToMel(8000.0f);
+  float melStep = (maxMel - minMel) / (MEL_FILTERS + 1);
+  for (int m = 0; m < MEL_FILTERS; m++) {
+    mel_points[m].start = constrain(floorf((FFT_SIZE + 1) * melToHz(minMel + m * melStep) / SAMPLE_RATE), 0, FFT_SIZE / 2 - 1);
+    mel_points[m].center = constrain(floorf((FFT_SIZE + 1) * melToHz(minMel + (m + 1) * melStep) / SAMPLE_RATE), 0, FFT_SIZE / 2 - 1);
+    mel_points[m].end = constrain(floorf((FFT_SIZE + 1) * melToHz(minMel + (m + 2) * melStep) / SAMPLE_RATE), 0, FFT_SIZE / 2 - 1);
+  }
+}
+
+float calculateMelEnergy(int filter) {
+  int start = mel_points[filter].start; int center = mel_points[filter].center; int end = mel_points[filter].end;
+  float energy = 0.0f;
+  if (center > start) {
+    for (int k = start; k < center; k++) energy += (realPart[k] * realPart[k] + imagPart[k] * imagPart[k]) * ((float)(k - start) / (center - start));
+  }
+  if (end > center) {
+    for (int k = center; k <= end; k++) energy += (realPart[k] * realPart[k] + imagPart[k] * imagPart[k]) * ((float)(end - k) / (end - center));
+  }
+  float width = melToHz((float)mel_points[filter].end) - melToHz((float)mel_points[filter].start);
+  if (width > 0.0f) energy *= (2.0f / width);
+  return (energy < 1e-10f) ? 1e-10f : energy;
+}
+
+float calculateDCT(float* melLog, int coefficient) {
+  float sum = 0.0f;
+  for (int m = 0; m < MEL_FILTERS; m++) sum += melLog[m] * cosf(PI * coefficient * (m + 0.5f) / MEL_FILTERS);
+  return sum * (coefficient == 0 ? sqrtf(1.0f / MEL_FILTERS) : sqrtf(2.0f / MEL_FILTERS));
+}
+
+void calculateFrameMFCC(int endPosition, int frameIndex, float* melLog) {
+  int frameStart = frameIndex * HOP_LENGTH - FFT_SIZE / 2;
+  for (int n = 0; n < FFT_SIZE; n++) {
+    int audioIndex = frameStart + n;
+    float sample = 0.0f;
+    if (audioIndex >= 0 && audioIndex < AUDIO_SAMPLES) {
+      sample = (float)getAudioSample(endPosition, audioIndex) / 32768.0f;
+    }
+    float window = 0.5f - 0.5f * cosf(2.0f * PI * n / FFT_SIZE);
+    realPart[n] = sample * window;
+    imagPart[n] = 0.0f;
+  }
+  calculateFFT();
+  for (int m = 0; m < MEL_FILTERS; m++) melLog[m] = 10.0f * log10f(calculateMelEnergy(m));
+}
+
+void calculateMFCC(int endPosition) {
+  float melLog[MEL_FILTERS];
+  for (int frame = 0; frame < MFCC_FRAMES; frame++) {
+    calculateFrameMFCC(endPosition, frame, melLog);
+    float maxDb = melLog[0];
+    for (int m = 1; m < MEL_FILTERS; m++) if (melLog[m] > maxDb) maxDb = melLog[m];
+    float floorDb = maxDb - 80.0f;
+    for (int m = 0; m < MEL_FILTERS; m++) if (melLog[m] < floorDb) melLog[m] = floorDb;
+    for (int c = 0; c < MFCC_COUNT; c++) mfcc_buffer[c * MFCC_FRAMES + frame] = calculateDCT(melLog, c);
+  }
+}
+
+void fillModelInput() {
+  float scale = input->params.scale; int zeroPoint = input->params.zero_point;
+  for (int c = 0; c < MFCC_COUNT; c++) {
+    for (int frame = 0; frame < MFCC_FRAMES; frame++) {
+      int q = (int)roundf(mfcc_buffer[c * MFCC_FRAMES + frame] / scale) + zeroPoint;
+      input->data.int8[c * MFCC_FRAMES + frame] = (int8_t)constrain(q, -128, 127);
+    }
+  }
+}
+
+// ============================================================
+// MODEL INITIALIZATION & INFERENCE
+// ============================================================
+
+bool setupModel() {
+  model = tflite::GetModel(asthra_model_int8);
+  if (model->version() != TFLITE_SCHEMA_VERSION) return false;
+  resolver.AddConv2D(); resolver.AddMaxPool2D(); resolver.AddFullyConnected();
+  resolver.AddSoftmax(); resolver.AddShape(); resolver.AddStridedSlice();
+  resolver.AddPack(); resolver.AddReshape();
+  interpreter = new tflite::MicroInterpreter(model, resolver, tensor_arena, TENSOR_ARENA_SIZE, nullptr, nullptr);
+  if (interpreter->AllocateTensors() != kTfLiteOk) return false;
+  input = interpreter->input(0); output = interpreter->output(0);
+  return true;
+}
+
+bool runInference(float &asthraConfidence) {
+  int capturedEnd = audio_write_position;
+  calculateMFCC(capturedEnd);
+  fillModelInput();
+
+  if (interpreter->Invoke() != kTfLiteOk) return false;
+
+  float asthra = (output->data.int8[1] - output->params.zero_point) * output->params.scale;
+  asthraConfidence = constrain(asthra, 0.0f, 1.0f);
+  return true;
+}
+
+// ============================================================
+// WI-FI SETUP
+// ============================================================
+
+void setupWiFi() {
+  Serial.println("\n================================");
+  Serial.printf("Connecting to Wi-Fi: %s\n", ssid);
+  
+  WiFi.disconnect(true, true);
+  delay(1000);
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 60) {
+    delay(500); 
+    Serial.print("."); 
+    attempts++;
+  }
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(">>> Wi-Fi CONNECTED! <<<");
+    Serial.print("ESP32 IP: "); Serial.println(WiFi.localIP());
+  } else {
+    Serial.println(">>> Wi-Fi CONNECTION FAILED! <<<");
+  }
+  Serial.println("================================");
+}
+
+// ============================================================
+// ON-DEMAND WEBSOCKET DISPATCH (CHUNKED / NO MALLOC CRASH)
+// ============================================================
+
+// ============================================================
+// ON-DEMAND WEBSOCKET DISPATCH (LIVE STREAMING)
+// ============================================================
+
+void handleSpokenCommand() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WS] Cannot connect: Wi-Fi not connected.");
+    return;
+  }
+
+  Serial.println("[WS] Connecting on-demand to Vosk ASR Server...");
+  webSocket.begin(server_host, server_port, "/");
+  webSocket.onEvent(webSocketEvent);
+  wsConnected = false;
+  responseReceived = false;
+
+  unsigned long connStart = millis();
+  while (!wsConnected && millis() - connStart < 3000) {
+    webSocket.loop();
+    delay(10);
+  }
+
+  if (!wsConnected) {
+    Serial.println("[WS] Handshake failed/timed out. Aborting.");
+    webSocket.disconnect();
+    return;
+  }
+
+  Serial.println("[WS] Connected! Live streaming 4 seconds of audio...");
+  showSpeakNow();
+
+  unsigned long recordStart = millis();
+  int last_read_pos = audio_write_position; // Anchor our starting point
+  const int CHUNK_SAMPLES = 1000;           // Small 2KB chunks
+  uint8_t tx_chunk[CHUNK_SAMPLES * 2];
+
+  // LIVE STREAM LOOP: Record and send instantly for 4000 milliseconds (4 seconds)
+  while (millis() - recordStart < 4000) {
+    int current_pos = audio_write_position;
+    int available = current_pos - last_read_pos;
+    if (available < 0) available += AUDIO_SAMPLES; // Handle ring buffer wrap-around
+
+    // As soon as the background mic task gathers 1000 samples, shoot them to VS Code
+    if (available >= CHUNK_SAMPLES) {
+      for (int i = 0; i < CHUNK_SAMPLES; i++) {
+        int16_t sample = getAudioSample(last_read_pos, i);
+        tx_chunk[i * 2] = sample & 0xFF;
+        tx_chunk[i * 2 + 1] = (sample >> 8) & 0xFF;
+      }
+      
+      webSocket.sendBIN(tx_chunk, CHUNK_SAMPLES * 2);
+      last_read_pos = (last_read_pos + CHUNK_SAMPLES) % AUDIO_SAMPLES;
+    }
+    
+    webSocket.loop();
+    delay(2);
+  }
+
+  showProcessing();
+  Serial.println("[WS] Finished streaming. Awaiting transcription...");
+
+  unsigned long waitStart = millis();
+  while (!responseReceived && millis() - waitStart < 4000) {
+    webSocket.loop();
+    delay(10);
+  }
+
+  webSocket.disconnect();
+  Serial.println("[WS] Socket cleanly closed. Returning to keyword detector.\n");
+  delay(1000);
+}
+// ============================================================
+// MAIN SETUP & LOOP
+// ============================================================
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("\n================================");
+  Serial.println("        ASTHRA EDGE AI          ");
+  Serial.println("================================");
+
+  Wire.begin(OLED_SDA, OLED_SCL);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  audio_ring = (int16_t*)heap_caps_malloc(AUDIO_SAMPLES * sizeof(int16_t), MALLOC_CAP_8BIT);
+  memset(audio_ring, 0, AUDIO_SAMPLES * sizeof(int16_t));
+  mfcc_buffer = (float*)heap_caps_malloc(MFCC_COUNT * MFCC_FRAMES * sizeof(float), MALLOC_CAP_8BIT);
+  realPart = (float*)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
+  imagPart = (float*)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
+  mel_points = (MelPoint*)heap_caps_malloc(MEL_FILTERS * sizeof(MelPoint), MALLOC_CAP_8BIT);
+  tensor_arena = (uint8_t*)heap_caps_malloc(TENSOR_ARENA_SIZE, MALLOC_CAP_8BIT);
+
+  setupMelFilters();
+  setupI2S();
+  modelReady = setupModel();
+
+  xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, &audioTaskHandle, 0);
+
+  setupWiFi();
+  showListening();
+  Serial.println("ASTHRA Ready. Say 'ASTHRA' to speak a command.\n");
+}
+
+void loop() {
+  if (!modelReady) return;
+
+  static unsigned long startUp = millis();
+  if (millis() - startUp < 2500) return;
+
+  // --- NEW: PRINT CPU & RAM STATS EVERY 5 SECONDS ---
+  static unsigned long lastStatsTime = 0;
+  if (millis() - lastStatsTime > 5000) {
+    lastStatsTime = millis();
+    uint32_t free_ram = ESP.getFreeHeap();
+    uint32_t total_ram = ESP.getHeapSize();
+    uint32_t ram_used_pct = 100 - (free_ram * 100 / total_ram);
+    
+    Serial.printf("\n[SYSTEM] CPU Freq: %d MHz | RAM Used: %d%% | Free RAM: %d KB\n", 
+                  ESP.getCpuFreqMHz(), ram_used_pct, free_ram / 1024);
+  }
+  // --------------------------------------------------
+
+  float confidence = 0.0f;
+  if (runInference(confidence)) {
+    if (confidence >= ASTHRA_THRESHOLD) {
+      Serial.printf("\n*** ASTHRA CONFIRMED (%.1f%%) ***\n", confidence * 100.0f);
+      showDetected(confidence);
+      delay(800);
+
+      handleSpokenCommand();
+      showListening();
+    }
+  }
+
+  delay(40);
+}
