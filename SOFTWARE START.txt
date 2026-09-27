@@ -38,3 +38,7 @@ python test_int8_model.py
 python live_test.py
 python continuous_kws.py
 python server.py
+
+AFTER CREATING THE PYTHON FILE AND PASTING THE CODE FIRST RUN THESE COMMANDS IN TERMINAL
+pip install websockets
+pip install  server.py
