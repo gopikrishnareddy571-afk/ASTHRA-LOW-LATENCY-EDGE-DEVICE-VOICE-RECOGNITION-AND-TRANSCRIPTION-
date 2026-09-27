@@ -21,3 +21,20 @@ notepad software\training\train_model.py
 notepad software\training\evaluate_model.py
 notepad software\asr\server.py
 python software\dataset_recorder\record_mems_dataset.py
+cd C:\Users\XXXXX\SIH26172_Asthra
+venv\Scripts\activate
+
+pip install pyserial numpy scipy librosa soundfile scikit-learn tensorflow
+
+python record_mems_dataset.py
+python check_dataset.py
+python feature_extraction.py
+python train_model.py
+python evaluate_model.py
+python convert_model.py
+python quantize_model.py
+python convert_to_header.py
+python test_int8_model.py
+python live_test.py
+python continuous_kws.py
+python server.py
