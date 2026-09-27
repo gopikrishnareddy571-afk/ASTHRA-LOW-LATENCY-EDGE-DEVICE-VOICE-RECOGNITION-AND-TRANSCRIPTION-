@@ -46,6 +46,7 @@ INMP441 Microphone
   CNN Wake-Word Model
         ↓
    ASTHRA Detected?
+
       ↙        ↘
     NO          YES
     ↓            ↓
@@ -54,3 +55,18 @@ INMP441 Microphone
               ASR Server
                   ↓
              Transcription
+📊 Performance
+
+The repository contains model accuracy, testing and hardware results in the results/ directory.
+
+Final real-world performance is being evaluated using the dedicated MEMS microphone dataset.
+🔮 Future Improvements
+*Larger speaker-diverse dataset
+*Speaker-independent evaluation
+*Long-duration false-activation testing
+*Further latency optimization
+*PCB implementation
+*Compact enclosure
+*Battery-powered operation
+*Improved ASR integration
+*Real-world environmental testing
