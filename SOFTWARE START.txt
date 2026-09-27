@@ -1,0 +1,23 @@
+FIRST RUN THESE COMMANDS IN YOUR COMMAND PROMPT AND MAKE SIH26172/ASTHRA FILE
+cd C:\Users\XXXXX\SIH26172_Asthra-CHANGE THE XXX PART BASED ON YOUR DEVICE NAME 
+venv\Scripts\activate
+
+pip install pyserial
+
+mkdir software
+mkdir software\dataset_recorder
+mkdir software\preprocessing
+mkdir software\training
+mkdir software\asr
+
+mkdir dataset
+mkdir dataset\asthra
+mkdir dataset\unknown
+mkdir dataset\noise
+
+notepad software\dataset_recorder\record_mems_dataset.py
+notepad software\preprocessing\preprocess_dataset.py
+notepad software\training\train_model.py
+notepad software\training\evaluate_model.py
+notepad software\asr\server.py
+python software\dataset_recorder\record_mems_dataset.py

@@ -1,0 +1,33 @@
+import sounddevice as sd
+import soundfile as sf
+import numpy as np
+
+DEVICE = 1
+RATE = 16000
+SECONDS = 1.5
+
+print("Say Asthra when recording starts...")
+input("Press ENTER: ")
+
+print("🎙️ RECORDING...")
+audio = sd.rec(
+    int(RATE * SECONDS),
+    samplerate=RATE,
+    channels=1,
+    device=DEVICE,
+    dtype="float32"
+)
+
+sd.wait()
+
+audio = audio.flatten()
+
+peak = np.max(np.abs(audio))
+rms = np.sqrt(np.mean(audio ** 2))
+
+print("\nPeak:", peak)
+print("RMS :", rms)
+
+sf.write("model/live_test.wav", audio, RATE)
+
+print("\nSaved: model/live_test.wav")

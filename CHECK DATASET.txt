@@ -1,0 +1,64 @@
+import os
+import soundfile as sf
+import numpy as np
+
+DATASET = "dataset"
+
+print("=" * 60)
+print("              ASTHRA DATASET CHECK")
+print("=" * 60)
+
+for label in ["asthra", "unknown", "noise"]:
+
+    folder = os.path.join(DATASET, label)
+
+    if not os.path.exists(folder):
+        print(f"\n❌ {label}: folder does not exist")
+        continue
+
+    files = [
+        f for f in os.listdir(folder)
+        if f.lower().endswith(".wav")
+    ]
+
+    print(f"\n📁 {label.upper()}")
+    print(f"Number of files: {len(files)}")
+
+    if len(files) == 0:
+        print("⚠️ No recordings found")
+        continue
+
+    good = 0
+    bad = 0
+
+    for filename in files:
+
+        filepath = os.path.join(folder, filename)
+
+        try:
+            audio, sample_rate = sf.read(filepath)
+
+            if len(audio) == 0:
+                bad += 1
+                print(f"❌ Empty: {filename}")
+                continue
+
+            peak = np.max(np.abs(audio))
+            rms = np.sqrt(np.mean(audio ** 2))
+
+            if peak < 0.001:
+                bad += 1
+                print(f"⚠️ Very quiet: {filename}")
+            else:
+                good += 1
+
+        except Exception as e:
+            bad += 1
+            print(f"❌ Error: {filename}")
+
+    print(f"✅ Good: {good}")
+    print(f"❌ Bad : {bad}")
+
+print("\n" + "=" * 60)
+print("Dataset check complete.")
+print("=" * 60)

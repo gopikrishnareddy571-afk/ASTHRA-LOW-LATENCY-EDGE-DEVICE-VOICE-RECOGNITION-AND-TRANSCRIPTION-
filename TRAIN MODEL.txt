@@ -1,0 +1,213 @@
+import numpy as np
+import tensorflow as tf
+
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+
+
+print("=" * 60)
+print("          ASTHRA MODEL TRAINING")
+print("=" * 60)
+
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+print("\nLoading dataset...")
+
+X = np.load("model/X.npy")
+y = np.load("model/y.npy")
+
+print("Dataset:", X.shape)
+print("Labels :", y.shape)
+
+if X.ndim == 3:
+    X = X[..., np.newaxis]
+
+print("Final X shape:", X.shape)
+
+
+# ============================================================
+# TRAIN / TEST SPLIT
+# ============================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining samples:", len(X_train))
+print("Testing samples :", len(X_test))
+
+
+# ============================================================
+# CLASS WEIGHTS
+# ============================================================
+
+classes = np.unique(y_train)
+
+weights = compute_class_weight(
+    class_weight="balanced",
+    classes=classes,
+    y=y_train
+)
+
+class_weights = {
+    int(c): float(w)
+    for c, w in zip(classes, weights)
+}
+
+print("\nClass weights:")
+print(class_weights)
+
+
+# ============================================================
+# ESP32-SAFE MODEL
+# ============================================================
+
+model = tf.keras.Sequential([
+
+    tf.keras.layers.Input(
+        shape=(13, 151, 1)
+    ),
+
+    # CONV 1
+    tf.keras.layers.Conv2D(
+        8,
+        (3, 3),
+        activation="relu",
+        padding="same"
+    ),
+
+    # POOL 1
+    tf.keras.layers.MaxPooling2D(
+        (2, 2)
+    ),
+
+    # CONV 2
+    tf.keras.layers.Conv2D(
+        16,
+        (3, 3),
+        activation="relu",
+        padding="same"
+    ),
+
+    # POOL 2
+    tf.keras.layers.MaxPooling2D(
+        (2, 2)
+    ),
+
+    # Reduce feature map directly to 1x1
+    #
+    # Input after pooling:
+    # approximately 3 x 37 x 16
+    #
+    # This convolution produces:
+    # 1 x 1 x 16
+    #
+    tf.keras.layers.Conv2D(
+        16,
+        (3, 37),
+        activation="relu",
+        padding="valid"
+    ),
+
+    # Fixed 1x1 feature map
+    tf.keras.layers.Conv2D(
+        32,
+        (1, 1),
+        activation="relu",
+        padding="valid"
+    ),
+
+    # Final classifier
+    tf.keras.layers.Conv2D(
+        2,
+        (1, 1),
+        activation=None,
+        padding="valid"
+    ),
+
+    # Fixed spatial reduction
+    tf.keras.layers.Flatten(),
+
+    tf.keras.layers.Activation("softmax")
+])
+
+
+# ============================================================
+# MODEL SUMMARY
+# ============================================================
+
+print("\nModel architecture:")
+model.summary()
+
+
+# ============================================================
+# COMPILE
+# ============================================================
+
+model.compile(
+    optimizer="adam",
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+
+# ============================================================
+# TRAIN
+# ============================================================
+
+print("\n")
+print("=" * 60)
+print("STARTING TRAINING")
+print("=" * 60)
+
+history = model.fit(
+    X_train,
+    y_train,
+    epochs=40,
+    batch_size=8,
+    validation_split=0.20,
+    class_weight=class_weights,
+    verbose=1
+)
+
+
+# ============================================================
+# TEST
+# ============================================================
+
+print("\n")
+print("=" * 60)
+print("TESTING MODEL")
+print("=" * 60)
+
+loss, accuracy = model.evaluate(
+    X_test,
+    y_test,
+    verbose=0
+)
+
+print()
+print(f"Test accuracy: {accuracy * 100:.2f}%")
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+MODEL_PATH = "model/asthra_model.keras"
+
+model.save(MODEL_PATH)
+
+print("\n")
+print("=" * 60)
+print("MODEL SAVED")
+print("=" * 60)
+
+print(MODEL_PATH)

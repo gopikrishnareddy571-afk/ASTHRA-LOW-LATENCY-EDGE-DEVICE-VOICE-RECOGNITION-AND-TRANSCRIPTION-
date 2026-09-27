@@ -1,0 +1,165 @@
+import tensorflow as tf
+import numpy as np
+import librosa
+import os
+import random
+
+MODEL_PATH = "model/asthra_model_int8.tflite"
+
+SAMPLE_RATE = 16000
+DURATION = 1.5
+SAMPLES = int(SAMPLE_RATE * DURATION)
+N_MFCC = 13
+
+print("=" * 60)
+print("        ASTHRA INT8 MODEL TEST")
+print("=" * 60)
+
+# Load TFLite model
+interpreter = tf.lite.Interpreter(
+    model_path=MODEL_PATH
+)
+
+interpreter.allocate_tensors()
+
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+print("\nInput:")
+print(input_details[0]["shape"])
+print(input_details[0]["dtype"])
+
+print("\nOutput:")
+print(output_details[0]["shape"])
+print(output_details[0]["dtype"])
+
+input_scale, input_zero = input_details[0]["quantization"]
+output_scale, output_zero = output_details[0]["quantization"]
+
+print("\nInput quantization:")
+print("Scale:", input_scale)
+print("Zero :", input_zero)
+
+print("\nOutput quantization:")
+print("Scale:", output_scale)
+print("Zero :", output_zero)
+
+
+def extract_features(filepath):
+
+    audio, sr = librosa.load(
+        filepath,
+        sr=SAMPLE_RATE,
+        mono=True
+    )
+
+    if len(audio) < SAMPLES:
+        audio = np.pad(
+            audio,
+            (0, SAMPLES - len(audio))
+        )
+    else:
+        audio = audio[:SAMPLES]
+
+    mfcc = librosa.feature.mfcc(
+        y=audio,
+        sr=SAMPLE_RATE,
+        n_mfcc=N_MFCC,
+        n_fft=512,
+        hop_length=160
+    )
+
+    return mfcc.astype(np.float32)
+
+
+# Test Asthra recordings
+folder = "dataset_augmented/asthra"
+
+files = [
+    f for f in os.listdir(folder)
+    if f.lower().endswith(".wav")
+]
+
+random.shuffle(files)
+
+correct = 0
+total = min(20, len(files))
+
+print("\nTesting", total, "Asthra recordings...\n")
+
+for i in range(total):
+
+    filename = files[i]
+
+    filepath = os.path.join(
+        folder,
+        filename
+    )
+
+    features = extract_features(filepath)
+
+    # Add batch + channel dimensions
+    features = np.expand_dims(
+        features,
+        axis=0
+    )
+
+    features = np.expand_dims(
+        features,
+        axis=-1
+    )
+
+    # Convert FLOAT32 → INT8
+    quantized = (
+        features / input_scale
+        + input_zero
+    )
+
+    quantized = np.round(
+        quantized
+    ).astype(np.int8)
+
+    interpreter.set_tensor(
+        input_details[0]["index"],
+        quantized
+    )
+
+    interpreter.invoke()
+
+    output = interpreter.get_tensor(
+        output_details[0]["index"]
+    )[0]
+
+    # Convert INT8 output back to float
+    output = (
+        output.astype(np.float32)
+        - output_zero
+    ) * output_scale
+
+    asthra_probability = output[1]
+
+    if asthra_probability >= 0.5:
+        result = "ASTHRA"
+        correct += 1
+    else:
+        result = "NOT ASTHRA"
+
+    print(
+        f"{i+1:02d}. "
+        f"{filename:<40} "
+        f"Asthra: {asthra_probability * 100:6.2f}% "
+        f"→ {result}"
+    )
+
+
+accuracy = correct / total * 100
+
+print("\n" + "=" * 60)
+print("INT8 TEST COMPLETE")
+print("=" * 60)
+
+print(
+    f"\nAsthra accuracy: "
+    f"{accuracy:.2f}% "
+    f"({correct}/{total})"
+)

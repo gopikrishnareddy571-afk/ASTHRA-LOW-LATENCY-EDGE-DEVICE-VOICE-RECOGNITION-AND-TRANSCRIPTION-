@@ -1,0 +1,109 @@
+import tensorflow as tf
+import numpy as np
+import librosa
+import os
+
+MODEL_PATH = "model/asthra_model.keras"
+TFLITE_PATH = "model/asthra_model_int8.tflite"
+
+DATASET = "dataset_augmented"
+
+SAMPLE_RATE = 16000
+DURATION = 1.5
+SAMPLES = int(SAMPLE_RATE * DURATION)
+N_MFCC = 13
+
+
+def representative_dataset():
+    count = 0
+
+    for label in ["asthra", "unknown", "noise"]:
+
+        folder = os.path.join(DATASET, label)
+
+        files = [
+            f for f in os.listdir(folder)
+            if f.lower().endswith(".wav")
+        ]
+
+        for filename in files:
+
+            filepath = os.path.join(folder, filename)
+
+            audio, sr = librosa.load(
+                filepath,
+                sr=SAMPLE_RATE,
+                mono=True
+            )
+
+            if len(audio) < SAMPLES:
+                audio = np.pad(
+                    audio,
+                    (0, SAMPLES - len(audio))
+                )
+            else:
+                audio = audio[:SAMPLES]
+
+            mfcc = librosa.feature.mfcc(
+                y=audio,
+                sr=SAMPLE_RATE,
+                n_mfcc=N_MFCC,
+                n_fft=512,
+                hop_length=160
+            )
+
+            mfcc = mfcc.astype(np.float32)
+
+            yield [np.expand_dims(
+                np.expand_dims(mfcc, axis=0),
+                axis=-1
+            )]
+
+            count += 1
+
+            if count >= 100:
+                return
+
+
+print("=" * 60)
+print("       ASTHRA INT8 QUANTIZATION")
+print("=" * 60)
+
+print("\nLoading model...")
+
+model = tf.keras.models.load_model(MODEL_PATH)
+
+print("Model loaded!")
+
+print("\nConverting to INT8...")
+
+converter = tf.lite.TFLiteConverter.from_keras_model(model)
+
+converter.optimizations = [
+    tf.lite.Optimize.DEFAULT
+]
+
+converter.representative_dataset = representative_dataset
+
+converter.target_spec.supported_ops = [
+    tf.lite.OpsSet.TFLITE_BUILTINS_INT8
+]
+
+converter.inference_input_type = tf.int8
+converter.inference_output_type = tf.int8
+
+tflite_model = converter.convert()
+
+with open(TFLITE_PATH, "wb") as f:
+    f.write(tflite_model)
+
+size_kb = len(tflite_model) / 1024
+
+print("\n==============================")
+print("INT8 CONVERSION COMPLETE")
+print("==============================")
+
+print("Model size:", f"{size_kb:.2f} KB")
+
+print("\nSaved to:")
+print(TFLITE_PATH)

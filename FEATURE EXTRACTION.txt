@@ -1,0 +1,87 @@
+import os
+import numpy as np
+import librosa
+
+DATASET = "dataset_augmented"
+
+SAMPLE_RATE = 16000
+DURATION = 1.5
+SAMPLES = int(SAMPLE_RATE * DURATION)
+
+N_MFCC = 13
+
+labels = {
+    "unknown": 0,
+    "noise": 0,
+    "asthra": 1
+}
+
+X = []
+y = []
+
+print("Extracting MFCC features...\n")
+
+for folder, label in labels.items():
+
+    path = os.path.join(DATASET, folder)
+
+    files = [
+        f for f in os.listdir(path)
+        if f.lower().endswith(".wav")
+    ]
+
+    print(f"{folder}: {len(files)} files")
+
+    for filename in files:
+
+        filepath = os.path.join(path, filename)
+
+        try:
+            audio, sr = librosa.load(
+                filepath,
+                sr=SAMPLE_RATE,
+                mono=True
+            )
+
+            # Force every recording to the same length
+            if len(audio) < SAMPLES:
+                audio = np.pad(
+                    audio,
+                    (0, SAMPLES - len(audio))
+                )
+            else:
+                audio = audio[:SAMPLES]
+
+            # MFCC
+            mfcc = librosa.feature.mfcc(
+                y=audio,
+                sr=SAMPLE_RATE,
+                n_mfcc=N_MFCC,
+                n_fft=512,
+                hop_length=160
+            )
+
+            X.append(mfcc)
+            y.append(label)
+
+        except Exception as e:
+            print("Error:", filename, e)
+
+X = np.array(X, dtype=np.float32)
+y = np.array(y, dtype=np.int32)
+
+os.makedirs("model", exist_ok=True)
+
+np.save("model/X.npy", X)
+np.save("model/y.npy", y)
+
+print("\n==============================")
+print("FEATURE EXTRACTION COMPLETE")
+print("==============================")
+
+print("X shape:", X.shape)
+print("y shape:", y.shape)
+
+print("\nSaved:")
+print("model/X.npy")
+print("model/y.npy")

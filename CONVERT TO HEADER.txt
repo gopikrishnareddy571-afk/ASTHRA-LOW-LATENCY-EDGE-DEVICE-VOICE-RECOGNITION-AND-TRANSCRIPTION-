@@ -1,0 +1,39 @@
+INPUT_FILE = "model/asthra_model_int8.tflite"
+OUTPUT_FILE = "model/asthra_model_int8.h"
+
+with open(INPUT_FILE, "rb") as f:
+    data = f.read()
+
+with open(OUTPUT_FILE, "w") as f:
+
+    f.write("#ifndef ASTHRA_MODEL_INT8_H\n")
+    f.write("#define ASTHRA_MODEL_INT8_H\n\n")
+
+    f.write("#include <stdint.h>\n\n")
+
+    f.write("const unsigned char asthra_model_int8[] = {\n")
+
+    for i in range(0, len(data), 12):
+
+        chunk = data[i:i + 12]
+
+        line = ", ".join(
+            f"0x{byte:02x}"
+            for byte in chunk
+        )
+
+        f.write("  " + line + ",\n")
+
+    f.write("};\n\n")
+
+    f.write(
+        "const unsigned int asthra_model_int8_len = "
+        + str(len(data))
+        + ";\n\n"
+    )
+
+    f.write("#endif\n")
+
+print("Model converted successfully!")
+print("Bytes:", len(data))
+print("Saved:", OUTPUT_FILE)

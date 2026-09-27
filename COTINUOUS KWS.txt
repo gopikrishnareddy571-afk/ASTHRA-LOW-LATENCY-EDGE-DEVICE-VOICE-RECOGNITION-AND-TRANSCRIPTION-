@@ -1,0 +1,172 @@
+import sounddevice as sd
+import numpy as np
+import librosa
+import tensorflow as tf
+import time
+
+# ==============================
+# ASTHRA CONTINUOUS KWS V2
+# ==============================
+
+MODEL_PATH = "model/asthra_model.keras"
+
+# Current working microphone
+DEVICE = 1
+
+# Audio settings
+MIC_RATE = 16000
+MODEL_RATE = 16000
+
+# Model expects 1.5 seconds
+WINDOW_SECONDS = 1.5
+WINDOW_SAMPLES = int(MODEL_RATE * WINDOW_SECONDS)
+
+# Detection settings
+THRESHOLD = 0.70
+REQUIRED_HITS = 2
+
+N_MFCC = 13
+
+print("=" * 60)
+print("          ASTHRA CONTINUOUS KWS V2")
+print("=" * 60)
+
+print("\nLoading model...")
+
+model = tf.keras.models.load_model(MODEL_PATH)
+
+print("Model loaded successfully!")
+
+# --------------------------------
+# MFCC feature extraction
+# --------------------------------
+
+def extract_features(audio):
+
+    # Make sure audio is exactly 1.5 seconds
+
+    if len(audio) < WINDOW_SAMPLES:
+        audio = np.pad(
+            audio,
+            (0, WINDOW_SAMPLES - len(audio))
+        )
+    else:
+        audio = audio[:WINDOW_SAMPLES]
+
+    mfcc = librosa.feature.mfcc(
+        y=audio,
+        sr=MODEL_RATE,
+        n_mfcc=N_MFCC,
+        n_fft=512,
+        hop_length=160
+    )
+
+    features = mfcc.astype(np.float32)
+
+    # Add batch dimension
+    features = np.expand_dims(features, axis=0)
+
+    # Add channel dimension
+    features = np.expand_dims(features, axis=-1)
+
+    return features
+
+
+# --------------------------------
+# Record audio
+# --------------------------------
+
+def record_audio():
+
+    audio = sd.rec(
+        WINDOW_SAMPLES,
+        samplerate=MIC_RATE,
+        channels=1,
+        device=DEVICE,
+        dtype="float32"
+    )
+
+    sd.wait()
+
+    return audio.flatten()
+
+
+# --------------------------------
+# Main loop
+# --------------------------------
+
+print("\n---------------------------------------------")
+print("Continuous listening started.")
+print("Say 'Asthra' at any time.")
+print("Press CTRL+C to stop.")
+print("---------------------------------------------\n")
+
+hit_count = 0
+
+try:
+
+    while True:
+
+        # Record audio window
+        audio = record_audio()
+
+        # Calculate audio level
+        peak = np.max(np.abs(audio))
+        rms = np.sqrt(np.mean(audio ** 2))
+
+        # Extract MFCC
+        features = extract_features(audio)
+
+        # Run model
+        prediction = model.predict(
+            features,
+            verbose=0
+        )[0]
+
+        unknown_probability = prediction[0]
+        asthra_probability = prediction[1]
+
+        print(
+            f"Asthra: {asthra_probability * 100:6.2f}%"
+            f" | Audio RMS: {rms:.4f}"
+        )
+
+        # --------------------------------
+        # Confidence filtering
+        # --------------------------------
+
+        if asthra_probability >= THRESHOLD:
+
+            hit_count += 1
+
+        else:
+
+            hit_count = 0
+
+        # --------------------------------
+        # Detection
+        # --------------------------------
+
+        if hit_count >= REQUIRED_HITS:
+
+            print("\n")
+            print("🔥🔥🔥 ASTHRA DETECTED! 🔥🔥🔥")
+            print(
+                f"Confidence: "
+                f"{asthra_probability * 100:.2f}%"
+            )
+            print("\n")
+
+            # Reset detector
+            hit_count = 0
+
+            # Small delay
+            time.sleep(0.5)
+
+
+except KeyboardInterrupt:
+
+    print("\n")
+    print("=" * 60)
+    print("Asthra detector stopped.")
+    print("=" * 60)
