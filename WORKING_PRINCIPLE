@@ -1,0 +1,13 @@
+# Working Principle
+
+1. The INMP441 continuously captures audio.
+2. ESP32 receives the audio through I2S.
+3. Audio is divided into processing frames.
+4. MFCC features are extracted.
+5. The lightweight CNN processes the MFCC features.
+6. The model determines whether the audio contains ASTHRA.
+7. If ASTHRA is not detected, the device continues listening.
+8. If ASTHRA is detected, speech recording is activated.
+9. Recorded speech is transmitted to the ASR server.
+10. The ASR server converts speech into text.
+11. The OLED provides device status information.
