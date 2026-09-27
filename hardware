@@ -1,7 +1,0 @@
-| Component            		| Purpose         |
-| -------------------- 		| --------------- |
-| ESP32 Dev Kit V1     		| Edge processing |
-| INMP441 I2S MEMS Mic 		| Audio input     |
-| 0.96" SSD1306 OLED   		| Status display  |
-| Power supply(2 li batteries)  | Device power    |
-| charging module(4056)		| Device power    |
