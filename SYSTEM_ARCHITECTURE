@@ -1,0 +1,30 @@
+# SYSTEM ARCHITECTURE
+
+
+          ┌──────────────────┐
+          │  INMP441 MIC     │
+          └────────┬─────────┘
+                   ↓
+          ┌──────────────────┐
+          │      ESP32       │
+          │                  │
+          │ Audio Capture    │
+          │       ↓          │
+          │ MFCC Extraction  │
+          │       ↓          │
+          │ CNN Classifier   │
+          └───────┬──────────┘
+                  │
+          ASTHRA detected
+                  ↓
+          ┌──────────────────┐
+          │ Speech Recording │
+          └────────┬─────────┘
+                   ↓
+              Wi-Fi / WebSocket
+                   ↓
+          ┌──────────────────┐
+          │   ASR Server     │
+          └────────┬─────────┘
+                   ↓
+             Transcription
