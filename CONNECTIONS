@@ -1,0 +1,21 @@
+MICROPHONE CONNECTIONS
+
+| INMP441 | ESP32   |
+| ------- | ------- |
+| VDD     | 3.3V    |
+| GND     | GND     |
+| L/R     | 3.3V    |
+| SCK     | GPIO 26 |
+| WS      | GPIO 25 |
+| SD      | GPIO 33 |
+
+
+OLED DISPLAY CONNECTIONS
+
+| OLED | ESP32   |
+| ---- | ------- |
+| VCC  | 3.3V    |
+| GND  | GND     |
+| SDA  | GPIO 21 |
+| SCL  | GPIO 22 |
+
