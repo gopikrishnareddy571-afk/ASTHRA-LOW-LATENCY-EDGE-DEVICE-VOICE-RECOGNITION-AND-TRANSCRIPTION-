@@ -1,0 +1,79 @@
+🤖 Machine Learning
+
+The wake-word model uses:
+
+MFCC audio features
+13 MFCC coefficients
+151 time frames
+Lightweight CNN architecture
+Two output classes:
+ASTHRA
+UNKNOWN / NOISE
+
+The trained model is converted to TensorFlow Lite and INT8 quantized for embedded deployment.
+
+Model Size
+Model	Size
+Float TFLite	~231.54 KB
+INT8 TFLite	~63.11 KB
+🎙️ Dataset
+
+The project uses audio recorded through the same INMP441 MEMS microphone and ESP32 audio path used by the final device.
+
+Dataset categories:
+
+ASTHRA
+UNKNOWN
+NOISE
+
+A dedicated ESP32 + Python recording system is included in the repository.
+
+🖥️ Software
+Arduino IDE
+ESP32 Arduino Core
+TensorFlow / TensorFlow Lite
+TensorFlow Lite Micro
+Python
+Librosa
+NumPy
+SciPy
+WebSocket communication🤖 Machine Learning
+
+The wake-word model uses:
+
+MFCC audio features
+13 MFCC coefficients
+151 time frames
+Lightweight CNN architecture
+Two output classes:
+ASTHRA
+UNKNOWN / NOISE
+
+The trained model is converted to TensorFlow Lite and INT8 quantized for embedded deployment.
+
+Model Size
+Model	Size
+Float TFLite	~231.54 KB
+INT8 TFLite	~63.11 KB
+🎙️ Dataset
+
+The project uses audio recorded through the same INMP441 MEMS microphone and ESP32 audio path used by the final device.
+
+Dataset categories:
+
+ASTHRA
+UNKNOWN
+NOISE
+
+A dedicated ESP32 + Python recording system is included in the repository.
+
+🖥️ Software
+Arduino IDE
+ESP32 Arduino Core
+TensorFlow / TensorFlow Lite
+TensorFlow Lite Micro
+Python
+Librosa
+NumPy
+SciPy
+WebSocket communication
